@@ -1,13 +1,19 @@
 package fun.mntale.copperPlus;
 
 import com.tcoded.folialib.FoliaLib;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
+import org.bukkit.block.data.Directional;
+import org.bukkit.block.data.Openable;
+import org.bukkit.block.data.type.Door;
+import org.bukkit.block.data.type.Slab;
+import org.bukkit.block.data.type.Stairs;
+import org.bukkit.block.data.type.TrapDoor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.ProjectileHitEvent;
-import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.concurrent.ThreadLocalRandom;
@@ -32,24 +38,26 @@ public final class CopperPlus extends JavaPlugin implements Listener {
     @EventHandler
     public void onProjectileHit(ProjectileHitEvent event) {
         if (event.getHitBlock() == null) return;
+
         foliaLib.getScheduler().runAtEntity(event.getEntity(), (a) -> {
             Block center = event.getHitBlock();
-            final int radius = 2; // 5x5x5 area radius
+            final int radius = 2; // 5x5x5 sphere
 
             for (int x = -radius; x <= radius; x++) {
                 for (int y = -radius; y <= radius; y++) {
                     for (int z = -radius; z <= radius; z++) {
 
-                        double distanceSquared = x*x + y*y + z*z;
-                        if (distanceSquared > radius*radius) continue; // keep spherical shape
+                        double distanceSquared = x * x + y * y + z * z;
+                        if (distanceSquared > radius * radius) continue;
 
                         Block nearby = center.getRelative(x, y, z);
                         Material type = nearby.getType();
 
-                            // Chance decreases with distance
-                            double distance = Math.sqrt(distanceSquared);
-                            double maxChance = 0.5; // 50% chance at center
-                            double chance = Math.max(0, maxChance * (1 - distance / radius));
+                        // Chance decreases with distance
+                        double distance = Math.sqrt(distanceSquared);
+                        double maxChance = 0.6; // 60% at center
+                        double chance = Math.max(0, maxChance * (1 - distance / radius));
+
                         if (type.name().contains("COPPER") && !type.name().contains("WAXED") && !type.name().contains("OXIDIZED")) {
                             if (ThreadLocalRandom.current().nextDouble() < chance) {
                                 oxidizeCopper(nearby);
@@ -62,7 +70,8 @@ public final class CopperPlus extends JavaPlugin implements Listener {
     }
 
     private void oxidizeCopper(Block block) {
-        Material nextStage = switch (block.getType()) {
+        Material current = block.getType();
+        Material nextStage = switch (current) {
             case COPPER_BLOCK -> Material.EXPOSED_COPPER;
             case EXPOSED_COPPER -> Material.WEATHERED_COPPER;
             case WEATHERED_COPPER -> Material.OXIDIZED_COPPER;
@@ -99,13 +108,65 @@ public final class CopperPlus extends JavaPlugin implements Listener {
             case EXPOSED_CUT_COPPER_STAIRS -> Material.WEATHERED_CUT_COPPER_STAIRS;
             case WEATHERED_CUT_COPPER_STAIRS -> Material.OXIDIZED_CUT_COPPER_STAIRS;
 
-            default -> block.getType();
+            default -> current;
         };
 
-        if (nextStage != block.getType()) {
-            foliaLib.getScheduler().runAtLocation(block.getLocation(), (t) -> {
-                block.setType(nextStage, false);
-            });
-        }
+        if (nextStage == current) return;
+
+        foliaLib.getScheduler().runAtLocation(block.getLocation(), (t) -> {
+
+            // Preserve stairs
+            if (block.getBlockData() instanceof Stairs stairs) {
+                Stairs newStairs = (Stairs) Bukkit.createBlockData(nextStage);
+                newStairs.setFacing(stairs.getFacing());
+                newStairs.setHalf(stairs.getHalf());
+                newStairs.setShape(stairs.getShape());
+                block.setBlockData(newStairs, false);
+                return;
+            }
+
+            // Preserve slabs
+            if (block.getBlockData() instanceof Slab slab) {
+                Slab newSlab = (Slab) Bukkit.createBlockData(nextStage);
+                newSlab.setType(slab.getType());
+                block.setBlockData(newSlab, false);
+                return;
+            }
+
+            // Preserve doors
+            if (block.getBlockData() instanceof Door door) {
+                Block top = door.getHalf() == Door.Half.TOP ? block : block.getRelative(0, 1, 0);
+                Block bottom = door.getHalf() == Door.Half.BOTTOM ? block : block.getRelative(0, -1, 0);
+
+                Door newTop = (Door) Bukkit.createBlockData(nextStage);
+                Door newBottom = (Door) Bukkit.createBlockData(nextStage);
+
+                // Copy states
+                newTop.setFacing(door.getFacing());
+                newTop.setHalf(Door.Half.TOP);
+                newTop.setOpen(door.isOpen());
+
+                newBottom.setFacing(door.getFacing());
+                newBottom.setHalf(Door.Half.BOTTOM);
+                newBottom.setOpen(door.isOpen());
+
+                top.setBlockData(newTop, false);
+                bottom.setBlockData(newBottom, false);
+                return;
+            }
+
+            // Preserve trapdoors
+            if (block.getBlockData() instanceof TrapDoor trap) {
+                TrapDoor newTrap = (TrapDoor) Bukkit.createBlockData(nextStage);
+                newTrap.setFacing(trap.getFacing());
+                newTrap.setOpen(trap.isOpen());
+                newTrap.setHalf(trap.getHalf());
+                block.setBlockData(newTrap, false);
+                return;
+            }
+
+            // Default for other blocks (chiseled, cut copper, etc.)
+            block.setType(nextStage, false);
+        });
     }
 }
